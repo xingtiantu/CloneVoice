@@ -1,0 +1,27 @@
+﻿# ============================================
+# 声音克隆训练器 - Python 依赖
+# ============================================
+
+# ---- Web 服务 ----
+flask>=2.0
+
+# ---- 深度学习 ----
+torch>=2.0
+torchaudio>=2.0
+
+# ---- ONNX ----
+onnxruntime>=1.15
+onnxscript>=1.0
+
+# ---- 音频处理 ----
+librosa>=0.10
+soundfile>=0.12
+scipy>=1.10
+numpy>=1.24
+
+# ---- 文本处理 ----
+pypinyin>=0.49
+
+# ---- 可选：AMD GPU 支持（Windows + AMD 显卡）----
+# torch-directml>=0.2
+# onnxruntime-directml>=1.15

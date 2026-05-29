@@ -1,0 +1,31 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Trained models & outputs
+models/
+uploads/
+videos/
+logs/
+run_log.txt
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
