@@ -69,7 +69,8 @@ CHAR_ID_TO_SYMBOL = {i: s for s, i in CHAR_SYMBOL_TO_ID.items()}
 # 拼音声母韵母映射（pypinyin 输出 → 我们的符号表）
 # 处理 pypinyin 的特殊拼音格式
 _PINYIN_REPLACE = {
-    "lv": "v", "nv": "v", "lve": "ve", "nve": "ve",
+    "lü": "lv", "nü": "nv", "lüe": "lve", "nüe": "nve",
+    "ue": "ve",
 }
 
 
@@ -149,6 +150,8 @@ def _pinyin_to_symbols(text: str) -> List[str]:
 
         # 特殊替换
         body = _PINYIN_REPLACE.get(body, body)
+        # 统一 ü → v（pypinyin 部分版本使用 ü 输出）
+        body = body.replace("ü", "v")
 
         # 拆分声母韵母
         initial, final = _split_pinyin(body)

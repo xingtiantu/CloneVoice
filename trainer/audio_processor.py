@@ -1,4 +1,4 @@
-﻿"""音频处理模块：加载、预处理、mel 提取、保存"""
+﻿"""音频处理模块：加载、预处理、mel 提取、保存、归一化"""
 import os
 import logging
 import numpy as np
@@ -14,12 +14,41 @@ N_MELS = 80
 FMIN = 0
 FMAX = 11025
 
+# Mel 归一化常量（log-magnitude mel 的近似均值和标准差）
+# 用于将 mel 值归一化到零附近，大幅提升训练稳定性
+MEL_MEAN = -5.0
+MEL_STD = 3.0
+
+
+def normalize_mel(mel: np.ndarray) -> np.ndarray:
+    """将 log-mel 谱 z-score 归一化到零均值单位方差附近。
+
+    Args:
+        mel: (n_mels, T) log-mel 谱
+
+    Returns:
+        归一化后的 mel 谱
+    """
+    return (mel - MEL_MEAN) / MEL_STD
+
+
+def denormalize_mel(mel: np.ndarray) -> np.ndarray:
+    """将归一化后的 mel 谱还原为 log-mel 谱。
+
+    Args:
+        mel: (n_mels, T) 归一化 mel
+
+    Returns:
+        log-mel 谱
+    """
+    return mel * MEL_STD + MEL_MEAN
+
 
 def load_audio(path: str, sr: int = SAMPLE_RATE) -> np.ndarray:
     """加载音频文件，返回单声道波形。
 
     支持 WAV/MP3/FLAC/OGG 等格式。
-    优先使用 librosa，失败时回退到 torchaudio。
+    优先使用 librosa，失败时回退到 torchaudio / soundfile。
 
     Args:
         path: 音频文件路径
@@ -44,11 +73,9 @@ def load_audio(path: str, sr: int = SAMPLE_RATE) -> np.ndarray:
         try:
             import torchaudio
             waveform, orig_sr = torchaudio.load(path)
-            # 转单声道
             if waveform.shape[0] > 1:
                 waveform = waveform.mean(dim=0, keepdim=True)
             waveform = waveform.squeeze(0).numpy()
-            # 重采样
             if orig_sr != sr:
                 import torchaudio.transforms as T
                 resampler = T.Resample(orig_sr, sr)
@@ -87,21 +114,23 @@ def load_audio(path: str, sr: int = SAMPLE_RATE) -> np.ndarray:
         import librosa
         wav, _ = librosa.effects.trim(wav, top_db=25)
     except Exception:
-        pass  # trim 失败不影响整体
+        pass
 
     logger.info(f"[Audio] 加载音频: {path}, 时长: {len(wav)/sr:.2f}s, 采样率: {sr}")
     return wav
 
 
 def wav_to_mel(wav: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
-    """提取 mel spectrogram。
+    """提取 log-mel spectrogram（未归一化，供展示/推理使用）。
+
+    训练数据请再调用 normalize_mel() 进行归一化。
 
     Args:
         wav: 波形数组 (samples,)
         sr: 采样率
 
     Returns:
-        np.ndarray: mel spectrogram (n_mels, T)
+        np.ndarray: log-mel spectrogram (n_mels, T)
     """
     import librosa
 
@@ -113,7 +142,7 @@ def wav_to_mel(wav: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
         n_mels=N_MELS,
         fmin=FMIN,
         fmax=FMAX,
-        power=1.0,  # magnitude spectrogram
+        power=1.0,
     )
 
     # log mel
@@ -122,11 +151,13 @@ def wav_to_mel(wav: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
     return mel
 
 
-def mel_to_wav_griffinlim(mel: np.ndarray, sr: int = SAMPLE_RATE, n_iter: int = 32) -> np.ndarray:
-    """使用 Griffin-Lim 算法从 mel 谱重建波形（快速预览用）。
+def mel_to_wav_griffinlim(mel: np.ndarray, sr: int = SAMPLE_RATE, n_iter: int = 64) -> np.ndarray:
+    """使用 Griffin-Lim 算法从 mel 谱重建波形。
+
+    改进：默认迭代次数从 32 提高到 64，显著降低背景噪声。
 
     Args:
-        mel: log mel spectrogram (n_mels, T)
+        mel: log-mel spectrogram (n_mels, T)
         sr: 采样率
         n_iter: Griffin-Lim 迭代次数
 
@@ -136,13 +167,12 @@ def mel_to_wav_griffinlim(mel: np.ndarray, sr: int = SAMPLE_RATE, n_iter: int = 
     import librosa
 
     # 反 log
-    mel_exp = np.exp(mel)
+    mel_exp = np.exp(np.clip(mel, -12.0, 3.0))
 
-    # mel → linear（近似）
+    # mel → linear
     mel_basis = librosa.filters.mel(
         sr=sr, n_fft=N_FFT, n_mels=N_MELS, fmin=FMIN, fmax=FMAX
     )
-    # 伪逆
     mel_inv = np.linalg.pinv(mel_basis)
     spec = np.maximum(np.dot(mel_inv, mel_exp), 0)
 
@@ -158,7 +188,7 @@ def mel_to_wav_griffinlim(mel: np.ndarray, sr: int = SAMPLE_RATE, n_iter: int = 
 
 
 def load_and_preprocess(path: str):
-    """完整预处理流程：加载 → 归一化 → mel。
+    """完整预处理流程：加载 → mel。
 
     Args:
         path: 音频文件路径
@@ -188,15 +218,12 @@ def save_wav(wav, path: str, sr: int = SAMPLE_RATE):
     if isinstance(wav, torch.Tensor):
         wav = wav.cpu().numpy()
 
-    # 确保是 1D
     wav = wav.squeeze()
 
-    # 归一化
+    # 归一化并裁剪
     peak = np.max(np.abs(wav))
     if peak > 0:
         wav = wav / peak * 0.95
-
-    # 裁剪到 int16 范围
     wav = np.clip(wav, -1.0, 1.0)
 
     os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
@@ -214,43 +241,25 @@ def split_audio_by_silence(wav: np.ndarray, sr: int = SAMPLE_RATE,
                            min_segment_sec: float = 2.0,
                            max_segment_sec: float = 5.0,
                            top_db: int = 30) -> list:
-    """基于静音检测将音频切分为小段。
-
-    Args:
-        wav: 波形数组
-        sr: 采样率
-        min_segment_sec: 最小段时长
-        max_segment_sec: 最大段时长
-        top_db: 静音阈值
-
-    Returns:
-        list: 切分后的波形片段列表
-    """
+    """基于静音检测将音频切分为小段。"""
     import librosa
 
-    # 检测非静音区间
     intervals = librosa.effects.split(wav, top_db=top_db)
-
     segments = []
     min_samples = int(min_segment_sec * sr)
     max_samples = int(max_segment_sec * sr)
 
     for start, end in intervals:
         chunk = wav[start:end]
-        # 如果太短，跳过
         if len(chunk) < min_samples:
             continue
-        # 如果太长，进一步切分
         while len(chunk) > max_samples:
             segments.append(chunk[:max_samples])
             chunk = chunk[max_samples:]
-        # 剩余部分
         if len(chunk) >= min_samples:
             segments.append(chunk)
 
-    # 如果没有合适分段，直接用整段
     if not segments and len(wav) > sr * 0.5:
-        # 即使较短也保留
         if len(wav) > max_samples:
             for i in range(0, len(wav), max_samples):
                 seg = wav[i:i + max_samples]
@@ -259,8 +268,9 @@ def split_audio_by_silence(wav: np.ndarray, sr: int = SAMPLE_RATE,
         else:
             segments.append(wav)
 
-    logger.info(f"[Audio] 音频切分: {len(intervals)} 个非静音段 → {len(segments)} 个训练片段")
+    logger.info(f"[Audio] 音频切分: {len(intervals)} 非静音段 → {len(segments)} 训练片段")
     return segments
+
 
 def run_inference_onnx_fast(onnx_path, text_seq, providers=None):
     """ONNX 推理快捷入口（单文件模型）。"""
@@ -272,4 +282,3 @@ def run_inference_split_fast(model_dir, text_seq, providers=None):
     """分段 ONNX 推理快捷入口（encoder + NumPy expand + decoder + postnet）。"""
     from .export_onnx import run_inference_split
     return run_inference_split(model_dir, text_seq, providers)
-

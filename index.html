@@ -112,13 +112,34 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-wei
   </div>
   <div class="panel active" id="panel1">
     <div class="card">
-      <div class="card-title">📖 朗读文案</div>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:10px">这是一段涵盖多种情绪的小故事（平静→开心→激动→温柔→感伤→乐观），请用自然语气朗读全文，随着故事发展表达不同情感。建议读完一遍约 60 秒。</p>
-      <div class="story-box" id="storyBox"></div>
+      <div class="card-title">📝 数据质量提示</div>
+      <div class="tip">
+        1. 为每段音频输入真实朗读文本，直接影响克隆效果。<br>
+        2. 建议录 2-3 段不同内容的短文（每段 20-30 秒），比单段 5 分钟效果更好。<br>
+        3. 录了长文也没关系，系统会自动切分为短段进行训练。<br>
+        4. 支持 WAV / MP3 / FLAC 格式上传或浏览器直接录制。<br>
+        5. 环境安静、发音清晰，避免背景噪音。
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title" style="cursor:pointer" onclick="toggleRefText()">
+        📖 推荐朗读文本 <span id="refToggle" style="font-size:11px;color:var(--muted)">展开 ▼</span>
+      </div>
+      <div class="ref-text-body" id="refTextBody" style="display:none">
+        <div class="tip">🎯 建议完整且有感情地朗读全文（约 4-5 分钟），能最大程度提升声音克隆的情感表现力。也可只朗读部分段落，多次录制叠加。</div>
+        <div class="ref-text-content" id="refTextContent"></div>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary" style="padding:4px 12px;font-size:11px" onclick="copyRefText()">📋 复制全文</button>
+          <button class="btn btn-secondary" style="padding:4px 12px;font-size:11px" onclick="loadRefTexts()">🔄 换短文本</button>
+          <button class="btn btn-secondary" style="padding:4px 12px;font-size:11px" onclick="showStory()">📜 情感长文</button>
+        </div>
+      </div>
     </div>
     <div class="card">
       <div class="card-title">🎤 录制语音</div>
-      <div class="tip">💡 建议完整朗读全文 1-2 遍（约 60-120 秒）。可多次录制叠加提升效果，最长 5 分钟。</div>
+      <div class="tip">💡 支持 WAV/MP3/FLAC 格式上传，系统会自动统一转换。<br>
+        💡 建议录 2-3 段不同内容的短文（每段 20-30 秒），比一段 5 分钟长文效果更好。<br>
+        💡 录长文也没关系，系统会自动切分为短段进行训练。可多次录制叠加。</div>
       <div class="tabs">
         <div class="tab active" id="tRec" onclick="swTab(this,tabRec)">录制</div>
         <div class="tab" id="tUp" onclick="swTab(this,tabUp)">上传</div>
@@ -151,6 +172,15 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-wei
       </div>
       <input type="hidden" name="mt" value="fastspeech2" id="mtIn">
       <div class="form-group"><label>训练轮数（Epochs）</label><input type="text" id="epIn" value="300"></div>
+      <div class="form-group"><label>Batch Size</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;flex:1" onclick="document.getElementById('bsIn').value='1';this.style.borderColor='var(--primary)';[...this.parentNode.children].forEach(function(b){b.style.borderColor=b===this?'var(--primary)':'var(--border)'}.bind(this))">1 ⭐</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;flex:1" onclick="document.getElementById('bsIn').value='2';this.style.borderColor='var(--primary)';[...this.parentNode.children].forEach(function(b){b.style.borderColor=b===this?'var(--primary)':'var(--border)'}.bind(this))">2</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;flex:1" onclick="document.getElementById('bsIn').value='4';this.style.borderColor='var(--primary)';[...this.parentNode.children].forEach(function(b){b.style.borderColor=b===this?'var(--primary)':'var(--border)'}.bind(this))">4</button>
+        </div>
+        <input type="hidden" id="bsIn" value="1">
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">长音频会被自动切分为短段，建议 batch_size=1 避免显存不足。多段短音频可适当调大。</div>
+      </div>
     </div>
     <div class="btn-group">
       <button class="btn btn-secondary" onclick="goStep(1)">← 返回</button>
@@ -206,10 +236,49 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-wei
 </div>
 <script>
 var S={step:1,clips:[],jid:null,es:null,lh:[],mid:null,rec:false,mr:null,ck:[],an:null,ac:null,t0:0,ti:null,waf:null};
-var STORY="那是一个普通的周一早晨。闹钟响了三遍，我才不情愿地从被窝里爬出来。唉，又是忙碌的一天。洗漱的时候，镜子里的自己看起来有点憔悴，最近加班太多了。出了门，秋天的空气一下子让人清醒了不少。路上的银杏叶已经变成了金黄色，风一吹，就像蝴蝶一样飘落下来。真美啊！我忍不住停下脚步拍了几张照片。到了公司，刚坐下，同事小李就跑过来，兴奋地说：你知道吗？咱们的项目通过评审了！客户特别满意！太棒了！我一下子从椅子上弹了起来，真的吗？这可是我们熬了好几个月的心血啊！那一刻，所有的疲惫都烟消云散了。中午休息的时候，我给妈妈打了个电话。妈，我挺好的，您别担心。工作忙是忙，但也学到很多东西。妈妈在电话那头沉默了一会儿，然后轻声说：孩子，妈知道你辛苦。别太累了，身体最重要。想家了就回来，妈给你做你最爱吃的红烧肉。听到这句话，我的眼眶突然有些湿润。是啊，不管走多远，家永远是最温暖的港湾。挂了电话，我望着窗外的天空。夕阳把云彩染成了橘红色，美得像一幅画。我想，人生就是这样吧，有疲惫也有惊喜，有泪水也有欢笑。但只要心中有光，就没有什么过不去的坎。明天，继续加油吧。";
+// 5分钟情感长文：涵盖多种情感表达（喜悦、思念、感动、感慨、温暖、奋斗）
+var STORY="那是一个普通的周一早晨。闹钟响了三遍，我才不情愿地从被窝里爬出来。唉，又是忙碌的一天。洗漱的时候，镜子里的自己看起来有点憔悴，最近加班太多了。出了门，秋天的空气一下子让人清醒了不少。路上的银杏叶已经变成了金黄色，风一吹，就像蝴蝶一样飘落下来。真美啊！我忍不住停下脚步拍了几张照片。到了公司，刚坐下，同事小李就跑过来，兴奋地说：你知道吗？咱们的项目通过评审了！客户特别满意！太棒了！我一下子从椅子上弹了起来，真的吗？这可是我们熬了好几个月的心血啊！那一刻，所有的疲惫都烟消云散了。中午休息的时候，我给妈妈打了个电话。妈，我挺好的，您别担心。工作忙是忙，但也学到很多东西。妈妈在电话那头沉默了一会儿，然后轻声说：孩子，妈知道你辛苦。别太累了，身体最重要。想家了就回来，妈给你做你最爱吃的红烧肉。听到这句话，我的眼眶突然有些湿润。是啊，不管走多远，家永远是最温暖的港湾。挂了电话，我望着窗外的天空。夕阳把云彩染成了橘红色，美得像一幅画。我想，人生就是这样吧，有疲惫也有惊喜，有泪水也有欢笑。\n\n下午开会的时候，经理突然宣布了一个消息——公司要派我去总部培训三个月。那一刻，我的心情复杂极了。激动的是，这是难得的学习机会；不安的是，要去一个完全陌生的城市。散会后，好朋友小张拍拍我的肩膀说：兄弟，这是好事啊！别怕，你行的。到时候我去看你。听到这句话，我心里暖暖的。是啊，有朋友的支持，还有什么好担心的呢？\n\n回到家已经是晚上八点多了。推开门，屋里空荡荡的，只有窗外的月光洒在地板上。我打开灯，给自己倒了杯热水，坐在沙发上发呆。突然想起小时候，每次放学回家，奶奶总是在门口等我，笑呵呵地说：回来啦？快洗手吃饭，今天做了你爱吃的糖醋排骨。那时候觉得这一切都很平常，现在想起来，那些平凡的时光才是最珍贵的。奶奶已经走了好几年了，但她的笑容永远留在我心里。\n\n周末的时候，我去了一趟老街。十年了，这里的变化真大啊。小时候最爱的那家豆浆铺子还在，店主阿姨头发都白了，但还是一眼认出了我。哎呀，是小林吗？长这么大了！她热情地招呼我坐下，端上一碗热腾腾的豆浆。那熟悉的味道一下子把我拉回了童年。街角那棵老槐树还在，树干上还刻着我和小伙伴们当年歪歪扭扭的名字。看着那些字迹，我不禁笑了出来。时光啊，你带走了多少东西，又留下了多少回忆。\n\n从老街回来，我坐在阳台上，看着城市的灯火。每一盏灯背后，都有一个故事。有人在为梦想奋斗，有人在为生活奔波，有人在享受团聚的温馨。而我呢？我站起身，对着夜空深深地吸了一口气。生活虽然不易，但正因为有酸甜苦辣，才显得那么真实那么动人。不管明天会怎样，我都要好好活着，好好爱身边的人，好好珍惜当下的每一刻。\n\n朋友，如果你正在读这段文字，我想对你说：无论你现在处于人生的哪个阶段，无论你正在经历什么，请相信，一切都会好起来的。生活中那些看似过不去的坎，回过头看，不过是成长路上的一个小小台阶。愿你心中有爱，眼中有光，脚下有路。加油！";
+// 短参考文本（前端缓存，也可从 API 获取）
+var SHORT_TEXTS=[];
+
+// 推荐朗读文本相关功能
+function toggleRefText(){
+  var body=document.getElementById("refTextBody"),tog=document.getElementById("refToggle");
+  if(body.style.display==="none"||!body.style.display){
+    body.style.display="block";tog.textContent="收起 ▲";
+    if(!document.getElementById("refTextContent").innerHTML.trim())showStory();
+  }else{
+    body.style.display="none";tog.textContent="展开 ▼";
+  }
+}
+function showStory(){
+  document.getElementById("refTextContent").innerHTML=STORY.replace(/\n/g,"<br>")+'<div style="margin-top:10px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);padding-top:8px">📏 全文约 1200 字，正常朗读约 4-5 分钟，涵盖喜悦、思念、感动、感慨、温暖、奋斗等多种情感。建议完整朗读 1-2 遍。</div>';
+}
+async function loadRefTexts(){
+  try{
+    var r=await fetch("/api/reference-texts");
+    var d=await r.json();
+    SHORT_TEXTS=d.texts||[];
+    document.getElementById("refTextContent").innerHTML='<div style="margin-bottom:6px;font-size:11px;color:var(--muted)">📏 短文本适合分段录制，每段约 5-15 秒。</div>'+
+      SHORT_TEXTS.map(function(t,i){return'<div style="padding:6px 10px;margin-bottom:6px;background:rgba(0,212,255,0.05);border-left:2px solid var(--primary);border-radius:4px;font-size:14px;line-height:1.6">'+(i+1)+'. '+t+'</div>'}).join("");
+  }catch(e){
+    document.getElementById("refTextContent").innerHTML="<div style='color:var(--error)'>加载参考文本失败</div>";
+  }
+}
+function copyRefText(){
+  var txt=document.getElementById("refTextContent").innerText||document.getElementById("refTextContent").textContent;
+  navigator.clipboard.writeText(txt.replace(/[📏📜]/g,"").trim()).then(function(){showToast("已复制到剪贴板")}).catch(function(){alert("复制失败，请手动复制")});
+}
+function showToast(msg){
+  var el=document.createElement("div");el.textContent=msg;
+  Object.assign(el.style,{position:"fixed",bottom:"20px",left:"50%",transform:"translateX(-50%)",background:"var(--success)",color:"#fff",padding:"10px 20px",borderRadius:"8px",fontSize:"13px",zIndex:9999,transition:"opacity 0.3s"});
+  document.body.appendChild(el);
+  setTimeout(function(){el.style.opacity="0";setTimeout(function(){el.remove()},300)},2000);
+}
+
 function init(){
-  document.getElementById("storyBox").textContent=STORY;
   loadSavedClips();
+  loadRefTexts();
   var fi=document.getElementById("fileIn");
   fi.onchange=function(){if(fi.files.length)upFile(fi.files[0])};
   var uz=document.getElementById("upZone");
@@ -273,27 +342,57 @@ async function startRec(){
 }
 function stopRec(){if(!S.rec)return;S.rec=false;clearInterval(S.ti);document.getElementById("recordBtn").classList.remove("recording");if(S.mr&&S.mr.state!=="inactive")S.mr.stop()}
 function drawLive(){var cv=document.getElementById("waveCV"),ctx=cv.getContext("2d");cv.width=cv.offsetWidth*2;cv.height=cv.offsetHeight*2;var buf=new Uint8Array(S.an.frequencyBinCount);function d(){if(!S.rec)return;S.waf=requestAnimationFrame(d);S.an.getByteTimeDomainData(buf);ctx.fillStyle="#0a0a0f";ctx.fillRect(0,0,cv.width,cv.height);ctx.strokeStyle="#00d4ff";ctx.lineWidth=2;ctx.beginPath();var sl=cv.width/buf.length;for(var i=0;i<buf.length;i++){var y=(buf[i]/255)*cv.height;i===0?ctx.moveTo(0,y):ctx.lineTo(i*sl,y)}ctx.stroke()}d()}
-async function upFile(f,name){var fd=new FormData();fd.append("audio",f,name||f.name);try{var r=await fetch("/api/upload-audio",{method:"POST",body:fd});var d=await r.json();if(d.error){alert("上传失败: "+d.error);return}if(d.duration<2){alert("太短，至少2秒");return}S.fn=d.filename;S.dur=d.duration;S.wf=d.waveform;S.clips.push({fn:d.filename,dur:d.duration});renderClips();saveClips();document.getElementById("btnN1").disabled=false}catch(e){alert("上传出错: "+e.message)}}
+async function upFile(f,name){var fd=new FormData();fd.append("audio",f,name||f.name);try{var r=await fetch("/api/upload-audio",{method:"POST",body:fd});var d=await r.json();if(d.error){alert("上传失败: "+d.error);return}if(d.duration<2){alert("太短，至少2秒");return}S.fn=d.filename;S.dur=d.duration;S.wf=d.waveform;S.clips.push({fn:d.filename,dur:d.duration,text:""});renderClips();saveClips();document.getElementById("btnN1").disabled=false}catch(e){alert("上传出错: "+e.message)}}
 
 function saveClips(){try{localStorage.setItem("vc_clips",JSON.stringify(S.clips))}catch(e){}}
-function loadSavedClips(){try{var d=localStorage.getItem("vc_clips");if(d){S.clips=JSON.parse(d);renderClips();if(S.clips.length)document.getElementById("btnN1").disabled=false}}catch(e){}}
+function clearClips(){S.clips=[];renderClips();saveClips()}
+async function loadSavedClips(){
+  try{
+    var d=localStorage.getItem("vc_clips");
+    if(!d)return;
+    var clips=JSON.parse(d);
+    if(!clips.length)return;
+    // 验证文件是否仍在服务器上存在，避免文件已删除但 localStorage 残留导致空显示
+    try{
+      var r=await fetch("/api/verify-clips",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({filenames:clips.map(function(c){return c.fn})})});
+      if(r.ok){
+        var exists=await r.json();
+        clips=clips.filter(function(c){return exists[c.fn]});
+      }
+    }catch(e){/* 验证失败则保留原数据 */}
+    S.clips=clips;renderClips();
+    if(S.clips.length)document.getElementById("btnN1").disabled=false;
+    saveClips()  // 同步清理 localStorage 中被过滤掉的残留记录
+  }catch(e){}
+}
 function renderClips(){
   var el=document.getElementById("audioResult");
   if(!S.clips.length){el.innerHTML='';return}
-  var total=0;S.clips.forEach(function(c){total+=c.dur});
-  var h='<div class="card-title" style="margin-top:10px">🎧 已录制 '+S.clips.length+' 段（共 '+total.toFixed(1)+' 秒）</div>';
+  var total=0,bound=0;S.clips.forEach(function(c){total+=c.dur;if((c.text||"").trim())bound++});
+  var h='<div class="card-title" style="margin-top:10px">🎧 已录制 '+S.clips.length+' 段（共 '+total.toFixed(1)+' 秒，已绑定 '+bound+'/'+S.clips.length+' 段文本）</div>';
   S.clips.forEach(function(c,i){
-    h+="<div class='audio-done'><button class='play-btn' onclick=\"new Audio('/uploads/"+c.fn+"').play()\"><svg viewBox='0 0 24 24'><path d='M8 5v14l11-7z'/></svg></button><div style='flex:1'><div style='font-size:13px'>第 "+(i+1)+" 段 - "+c.dur.toFixed(1)+" 秒</div></div><button class='btn btn-danger' style='padding:4px 8px;font-size:11px' onclick='delClip("+i+")'>删除</button></div>";
+    var hasText=(c.text||"").trim().length>0;
+    h+="<div class='audio-done' id='ac"+i+"' style='align-items:flex-start;flex-direction:column;gap:8px;padding:14px;"+(hasText?"border-color:var(--success)":"")+"'>";
+    h+="<div style='display:flex;align-items:center;gap:12px;width:100%'>";
+    h+="<button class='play-btn' onclick=\"new Audio('/uploads/"+c.fn+"').play()\"><svg viewBox='0 0 24 24'><path d='M8 5v14l11-7z'/></svg></button>";
+    h+="<div style='flex:1'><div style='font-size:13px'>第 "+(i+1)+" 段 - "+c.dur.toFixed(1)+" 秒</div></div>";
+    h+="<button class='btn btn-danger' style='padding:4px 8px;font-size:11px' onclick='delClip("+i+")'>删除</button></div>";
+    h+="<div style='width:100%'><label style='margin-bottom:4px'>"+(hasText?"✅ 已绑定文本":"⚠️ 请输入这段音频的真实朗读内容")+"</label>";
+    h+="<textarea id='at"+i+"' rows='3' style='min-height:60px;font-size:13px' placeholder='请输入这段音频的真实朗读内容...' oninput='updTxt("+i+",this.value)'>"+(c.text||"")+"</textarea></div>";
+    h+="</div>";
   });
   el.innerHTML=h;
 }
+function updTxt(i,val){S.clips[i].text=val;saveClips();var has=(val||"").trim().length>0;var el=document.getElementById("ac"+i);if(el){el.style.borderColor=has?"var(--success)":"var(--border)";var lb=el.querySelector("label");if(lb)lb.textContent=has?"✅ 已绑定文本":"⚠️ 请输入这段音频的真实朗读内容"}}
 function delClip(i){S.clips.splice(i,1);renderClips();saveClips();if(!S.clips.length)document.getElementById("btnN1").disabled=true}
 
 async function startTrain(){
   if(!S.clips.length){alert("请先录制");return}
-  var mt="fastspeech2",tm=document.querySelector("input[name=tm]:checked").value,vn=document.getElementById("vName").value.trim()||"我的声音",ep=parseInt(document.getElementById("epIn").value)||300;
+  var mt="fastspeech2",tm=document.querySelector("input[name=tm]:checked").value,vn=document.getElementById("vName").value.trim()||"我的声音",ep=parseInt(document.getElementById("epIn").value)||300,bs=parseInt(document.getElementById("bsIn").value)||1;
+  var emptyTxts=S.clips.filter(function(c){return !(c.text||"").trim()});
+  if(emptyTxts.length){if(!confirm("有 "+emptyTxts.length+" 段音频未填写文本，将使用默认故事文案（可能影响克隆效果）。是否继续？"))return}
   goStep(3);S.lh=[];document.getElementById("pFill").style.width="0%";document.getElementById("pPct").textContent="0%";document.getElementById("epTxt").textContent="启动中...";
-  try{var r=await fetch("/api/start-training",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({clips:S.clips.map(function(c){return {filename:c.fn,text:STORY,emotion:'neutral'}}),model_type:mt,text_mode:tm,voice_name:vn,params:{epochs:ep}})});var d=await r.json();if(d.error){alert("失败: "+d.error);goStep(2);return}S.jid=d.job_id;document.getElementById("devB").textContent=d.device||"CPU";listenSSE(d.job_id)}catch(e){alert("请求失败: "+e.message);goStep(2)}
+  try{var r=await fetch("/api/start-training",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({clips:S.clips.map(function(c){return {filename:c.fn,text:(c.text||"").trim()||STORY,emotion:'neutral'}}),model_type:mt,text_mode:tm,voice_name:vn,params:{epochs:ep,batch_size:bs}})});var d=await r.json();if(d.error){alert("失败: "+d.error);goStep(2);return}S.jid=d.job_id;document.getElementById("devB").textContent=d.device||"CPU";listenSSE(d.job_id)}catch(e){alert("请求失败: "+e.message);goStep(2)}
 }
 function listenSSE(jid){
   if(S.es)S.es.close();S.es=new EventSource("/api/training-status?job_id="+jid);
@@ -304,7 +403,7 @@ function listenSSE(jid){
     if(d.remaining!==undefined&&d.remaining>0)document.getElementById("tRm").textContent=fmt(Math.floor(d.remaining));
     if(d.loss_history){S.lh=d.loss_history;drawL()}
     if(d.type==="complete"){S.es.close();S.es=null;S.mid=jid;goStep(4);document.getElementById("doneMsg").textContent=d.message||"完成"}
-    if(d.type==="error"){S.es.close();S.es=null;alert("训练出错: "+(d.message||""));goStep(2)}
+    if(d.type==="error"){S.es.close();S.es=null;document.getElementById("pPct").textContent="❌ 失败";document.getElementById("epTxt").innerHTML='<span style="color:var(--error)">'+(d.message||"未知错误")+'</span><br><br><button class="btn btn-primary" onclick="goStep(2)" style="margin-top:8px">🔁 修改配置重试</button><button class="btn btn-secondary" onclick="goStep(1)" style="margin:8px 0 0 8px">🎤 回到录制</button><div style="margin-top:10px;font-size:12px;color:var(--muted)">💡 音频文件和文本都在，无需重新录制。调整参数后直接重试即可。</div>'}
   }catch(x){}};
   S.es.onerror=function(){setTimeout(function(){if(S.es){S.es.close();S.es=null}if(S.step===3&&S.jid){S.mid=S.jid;goStep(4)}},3000)};
 }

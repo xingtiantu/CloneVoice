@@ -22,6 +22,9 @@ numpy>=1.24
 # ---- 文本处理 ----
 pypinyin>=0.49
 
-# ---- 可选：AMD GPU 支持（Windows + AMD 显卡）----
-# torch-directml>=0.2
-# onnxruntime-directml>=1.15
+# ---- AMD GPU 支持（Windows + AMD 显卡，torch-directml 自带 PyTorch）----
+torch-directml>=0.2
+onnxruntime-directml>=1.15
+
+# ---- 音频-文本强制对齐 ----
+openai-whisper>=20230314

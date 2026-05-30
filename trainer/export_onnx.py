@@ -1,4 +1,4 @@
-"""ONNX 导出模块：将训练好的模型导出为 ONNX 格式"""
+﻿"""ONNX 导出模块：将训练好的模型导出为 ONNX 格式"""
 import os
 import json
 import shutil
@@ -10,9 +10,13 @@ from . import audio_processor
 
 logger = logging.getLogger(__name__)
 
+# mel 归一化常量
+MEL_MEAN = audio_processor.MEL_MEAN
+MEL_STD = audio_processor.MEL_STD
+
 
 def _save_config_and_audio(output_dir, voice_name, reference_text, audio_path, model_type, text_mode):
-    """Export failed but save config + audio anyway."""
+    """保存配置和参考音频（出口失败时回退）。"""
     config = {
         "name": voice_name,
         "reference_text": reference_text,
@@ -35,7 +39,14 @@ def _save_config_and_audio(output_dir, voice_name, reference_text, audio_path, m
 def export_model(model_type, checkpoint_path, output_dir,
                  voice_name, reference_text, audio_path,
                  text_mode="pinyin", device=None):
-    """Export trained model to ONNX format."""
+    """将训练好的模型导出为 ONNX 格式。
+
+    Args:
+        model_type: "fastspeech2" 或 "vits"
+        checkpoint_path: 训练好的 checkpoint 路径
+        output_dir: 输出目录
+        device: 用于导出的设备（AMD DirectML 下请传 CPU）
+    """
     if device is None:
         device = torch.device("cpu")
 
@@ -47,8 +58,8 @@ def export_model(model_type, checkpoint_path, output_dir,
     if model_type == "fastspeech2":
         _export_fastspeech2_split(checkpoint, vocab_size, device, output_dir)
     else:
-        model, hifigan = _load_vits(checkpoint, vocab_size, device)
-        wrapper = _VITSWrapper(model, hifigan)
+        model = _load_vits(checkpoint, vocab_size, device)
+        wrapper = _VITSWrapper(model)
         wrapper.eval()
         dummy_input = torch.randint(1, max(vocab_size, 2), (1, 32), dtype=torch.long).to(device)
         onnx_path = os.path.join(output_dir, "voice_model.onnx")
@@ -59,10 +70,10 @@ def export_model(model_type, checkpoint_path, output_dir,
                               opset_version=14, do_constant_folding=True)
         except Exception as e:
             _save_config_and_audio(output_dir, voice_name, reference_text, audio_path, model_type, text_mode)
-            raise RuntimeError(f"ONNX export failed: {e}. Checkpoint saved for manual export.")
+            raise RuntimeError(f"ONNX export failed: {e}")
         _verify_onnx(onnx_path, dummy_input.cpu().numpy())
 
-    # Save config
+    # 保存配置
     config = {
         "name": voice_name,
         "reference_text": reference_text,
@@ -78,14 +89,14 @@ def export_model(model_type, checkpoint_path, output_dir,
         json.dump(config, f, ensure_ascii=False, indent=2)
     logger.info(f"[Export] Config saved: {config_path}")
 
-    # Save reference audio
+    # 保存参考音频
     ref_path = os.path.join(output_dir, "reference_audio.wav")
     if os.path.exists(audio_path):
         wav, _ = audio_processor.load_and_preprocess(audio_path)
         audio_processor.save_wav(wav.squeeze(0), ref_path)
         logger.info(f"[Export] Ref audio saved: {ref_path}")
 
-    # Copy checkpoint
+    # 复制 checkpoint
     import time as _time
     dst_ckpt = os.path.join(output_dir, "checkpoint.pt")
     for _attempt in range(3):
@@ -106,11 +117,9 @@ def export_model(model_type, checkpoint_path, output_dir,
 
 # ============================================================
 # FastSpeech2 split export: encoder + decoder + postnet
-# LengthRegulator expansion is done in Python (NumPy)
 # ============================================================
 
 class _EncoderWrapper(torch.nn.Module):
-    """FastSpeech2 encoder + duration predictor."""
     def __init__(self, model):
         super().__init__()
         self.embedding = model.embedding
@@ -129,7 +138,6 @@ class _EncoderWrapper(torch.nn.Module):
 
 
 class _DecoderWrapper(torch.nn.Module):
-    """FastSpeech2 decoder (expanded hidden -> mel)."""
     def __init__(self, model):
         super().__init__()
         self.pos_encoding = model.pos_encoding
@@ -144,7 +152,6 @@ class _DecoderWrapper(torch.nn.Module):
 
 
 class _PostNetWrapper(torch.nn.Module):
-    """FastSpeech2 PostNet (mel refinement)."""
     def __init__(self, model):
         super().__init__()
         self.postnet = model.postnet
@@ -171,7 +178,7 @@ def _export_fastspeech2_split(checkpoint, vocab_size, device, output_dir):
         input_names=["text_seq"],
         output_names=["hidden", "duration_pred"],
         dynamic_axes={"text_seq": {1: "seq_len"}, "hidden": {1: "seq_len"}, "duration_pred": {1: "seq_len"}},
-        opset_version=14, do_constant_folding=True, external_data=False,
+        opset_version=14, do_constant_folding=True,
     )
     logger.info(f"[Export] Encoder saved: {enc_path}")
 
@@ -185,7 +192,7 @@ def _export_fastspeech2_split(checkpoint, vocab_size, device, output_dir):
         input_names=["expanded_hidden"],
         output_names=["mel_pred"],
         dynamic_axes={"expanded_hidden": {1: "mel_len"}, "mel_pred": {1: "mel_len"}},
-        opset_version=14, do_constant_folding=True, external_data=False,
+        opset_version=14, do_constant_folding=True,
     )
     logger.info(f"[Export] Decoder saved: {dec_path}")
 
@@ -199,23 +206,21 @@ def _export_fastspeech2_split(checkpoint, vocab_size, device, output_dir):
         input_names=["mel_in"],
         output_names=["mel_out"],
         dynamic_axes={"mel_in": {1: "mel_len"}, "mel_out": {1: "mel_len"}},
-        opset_version=14, do_constant_folding=True, external_data=False,
+        opset_version=14, do_constant_folding=True,
     )
     logger.info(f"[Export] PostNet saved: {post_path}")
 
-    # 4. HiFi-GAN vocoder
-    hifigan_ckpt = os.path.join(os.path.dirname(output_dir) if not os.path.exists(os.path.join(output_dir, "hifigan.pt")) else output_dir, "hifigan.pt")
-    # Try same dir first
+    # 4. HiFi-GAN vocoder（可选）
     hifigan_ckpt = os.path.join(output_dir, "hifigan.pt")
-    if not os.path.exists(hifigan_ckpt):
-        # Try checkpoint
-        hifigan_sd = checkpoint.get("hifigan_state_dict")
-        if hifigan_sd is None:
-            logger.warning("[Export] No HiFi-GAN weights found, will use Griffin-Lim fallback")
-        else:
+    hifigan_sd = checkpoint.get("hifigan_state_dict")
+    if os.path.exists(hifigan_ckpt) or hifigan_sd is not None:
+        try:
             from .hifigan_lite import HiFiGANGenerator
             hifigan_model = HiFiGANGenerator().to(device)
-            hifigan_model.load_state_dict(hifigan_sd)
+            if os.path.exists(hifigan_ckpt):
+                hifigan_model.load_state_dict(torch.load(hifigan_ckpt, map_location=device))
+            else:
+                hifigan_model.load_state_dict(hifigan_sd)
             hifigan_model.eval()
             gan_path = os.path.join(output_dir, "hifigan.onnx")
             dummy_mel = torch.randn(1, 80, 100).to(device)
@@ -223,23 +228,13 @@ def _export_fastspeech2_split(checkpoint, vocab_size, device, output_dir):
                 hifigan_model, dummy_mel, gan_path,
                 input_names=["mel"], output_names=["wav"],
                 dynamic_axes={"mel": {2: "mel_len"}, "wav": {2: "wav_len"}},
-                opset_version=14, do_constant_folding=True, external_data=False,
+                opset_version=14, do_constant_folding=True,
             )
             logger.info(f"[Export] HiFi-GAN saved: {gan_path}")
+        except Exception as e:
+            logger.warning(f"[Export] HiFi-GAN 导出失败（将使用 Griffin-Lim / 预训练声码器回退）: {e}")
     else:
-        from .hifigan_lite import HiFiGANGenerator
-        hifigan_model = HiFiGANGenerator().to(device)
-        hifigan_model.load_state_dict(torch.load(hifigan_ckpt, map_location=device))
-        hifigan_model.eval()
-        gan_path = os.path.join(output_dir, "hifigan.onnx")
-        dummy_mel = torch.randn(1, 80, 100).to(device)
-        torch.onnx.export(
-            hifigan_model, dummy_mel, gan_path,
-            input_names=["mel"], output_names=["wav"],
-            dynamic_axes={"mel": {2: "mel_len"}, "wav": {2: "wav_len"}},
-            opset_version=14, do_constant_folding=True, external_data=False,
-        )
-        logger.info(f"[Export] HiFi-GAN saved: {gan_path}")
+        logger.info("[Export] 未找到 HiFi-GAN 权重，推理时将使用 Griffin-Lim / 预训练声码器回退")
 
 
 # ============================================================
@@ -255,20 +250,15 @@ def _load_fastspeech2(checkpoint, vocab_size, device):
 
 def _load_vits(checkpoint, vocab_size, device):
     from .vits_lite import VITSLite
-    from .hifigan_lite import HiFiGANGenerator
     model = VITSLite(vocab_size).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
-    hifigan = HiFiGANGenerator().to(device)
-    if "hifigan_state_dict" in checkpoint:
-        hifigan.load_state_dict(checkpoint["hifigan_state_dict"])
-    return model, hifigan
+    return model
 
 
 class _VITSWrapper(torch.nn.Module):
-    def __init__(self, model, hifigan):
+    def __init__(self, model):
         super().__init__()
         self.model = model
-        self.hifigan = hifigan
 
     def forward(self, text_seq):
         result = self.model(text_seq)
@@ -291,18 +281,21 @@ def _verify_onnx(onnx_path, dummy_input):
 # ============================================================
 
 def run_inference_onnx(onnx_path, text_seq, providers=None):
-    """Single-model ONNX inference (legacy, for VITS)."""
+    """VITS 单模型 ONNX 推理。输出为归一化 mel，反归一化后返回。"""
     import onnxruntime as ort
     if providers is None:
         providers = ["CPUExecutionProvider"]
     session = ort.InferenceSession(onnx_path, providers=providers)
     input_name = session.get_inputs()[0].name
-    output = session.run(None, {input_name: text_seq.astype(np.int64)})
-    return output[0]
+    mel = session.run(None, {input_name: text_seq.astype(np.int64)})[0]
+    # 反归一化并裁剪
+    mel = mel * MEL_STD + MEL_MEAN
+    mel = np.clip(mel, -12.0, 3.0)
+    return mel
 
 
-def run_inference_split(model_dir, text_seq, providers=None):
-    """Split-model inference: encoder -> expand -> decoder -> postnet -> HiFi-GAN."""
+def run_inference_split(model_dir, text_seq, providers=None, use_hifigan=False):
+    """分段 ONNX 推理：encoder → expand → decoder → postnet → 反归一化 → vocoder。"""
     import onnxruntime as ort
     if providers is None:
         providers = ["CPUExecutionProvider"]
@@ -340,17 +333,19 @@ def run_inference_split(model_dir, text_seq, providers=None):
     # 4. PostNet
     post_session = ort.InferenceSession(post_path, providers=providers)
     mel_post = post_session.run(None, {"mel_in": mel_pred.astype(np.float32)})[0]
-    mel_post = np.clip(mel_post, -12.0, 2.0)
 
-    # 5. HiFi-GAN vocoder (if available)
-    if os.path.exists(gan_path):
+    # 5. 反归一化（ONNX 模型输出的是归一化 mel）
+    mel_post = mel_post * MEL_STD + MEL_MEAN
+    mel_post = np.clip(mel_post, -12.0, 3.0)
+
+    # 6. Vocoder: HiFi-GAN or Griffin-Lim
+    if use_hifigan and os.path.exists(gan_path):
         try:
             gan_session = ort.InferenceSession(gan_path, providers=providers)
-            mel_for_gan = mel_post.transpose(0, 2, 1).astype(np.float32)  # (1, 80, T_mel)
+            mel_for_gan = mel_post.transpose(0, 2, 1).astype(np.float32)
             wav = gan_session.run(None, {"mel": mel_for_gan})[0]
-            return wav  # (1, 1, T_wav)
+            return wav
         except Exception as e:
-            logger.warning(f"[Inference] HiFi-GAN failed, returning mel: {e}")
+            logger.warning(f"[Inference] HiFi-GAN failed, falling back to mel: {e}")
 
-    # Fallback: return mel for Griffin-Lim
     return mel_post

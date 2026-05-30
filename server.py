@@ -9,6 +9,7 @@ import logging
 import zipfile
 import threading
 import numpy as np
+import torch
 
 from flask import Flask, request, jsonify, Response, send_file, send_from_directory
 
@@ -40,6 +41,27 @@ MODEL_DIR = "models"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
+
+def _make_filename(prefix, ext=".wav", suffix_len=8):
+    """生成带日期时间的文件名：{prefix}_{YYYYMMDD_HHMMSS}_{suffix}{ext}"""
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{prefix}_{ts}_{uuid.uuid4().hex[:suffix_len]}{ext}"
+
+
+def _cleanup_old_previews(max_age_hours=24):
+    """删除 uploads 目录中超过指定时长的预览文件。"""
+    now = time.time()
+    try:
+        for fname in os.listdir(UPLOAD_DIR):
+            if fname.startswith("preview_"):
+                fpath = os.path.join(UPLOAD_DIR, fname)
+                age_hours = (now - os.path.getmtime(fpath)) / 3600
+                if age_hours > max_age_hours:
+                    os.remove(fpath)
+    except Exception:
+        pass
+
+
 # 推荐参考文本
 REFERENCE_TEXTS = [
     "今天天气真好，阳光明媚，适合出去散步。",
@@ -47,6 +69,11 @@ REFERENCE_TEXTS = [
     "人工智能正在改变我们的生活方式，语音合成是其中的重要应用。",
     "春眠不觉晓，处处闻啼鸟。夜来风雨声，花落知多少。",
     "白日依山尽，黄河入海流。欲穷千里目，更上一层楼。",
+    "哇，这个消息太让人惊喜了，简直不敢相信自己的耳朵！",
+    "没关系，慢慢来，我一直都在你身边陪着你呢。",
+    "时间过得真快啊，那些美好的回忆再也回不去了。",
+    "各位观众朋友大家好，欢迎收看今天的节目，我是主持人。",
+    "生活虽然不易，但正因为有酸甜苦辣，才显得那么真实动人。",
 ]
 
 
@@ -80,26 +107,30 @@ def upload_audio():
         if not file.filename:
             return jsonify({"error": "文件名为空"}), 400
 
-        # 生成唯一文件名
+        # 生成唯一文件名（原始格式）
         ext = os.path.splitext(file.filename)[1].lower()
         if ext not in (".wav", ".mp3", ".flac", ".ogg", ".webm", ".m4a"):
             return jsonify({"error": f"不支持的音频格式: {ext}"}), 400
 
-        filename = f"{uuid.uuid4().hex[:12]}{ext}"
-        filepath = os.path.join(UPLOAD_DIR, filename)
-        file.save(filepath)
+        raw_filename = _make_filename("raw", ext, 8)
+        raw_path = os.path.join(UPLOAD_DIR, raw_filename)
+        file.save(raw_path)
 
         # 预处理并获取信息
         try:
-            wav, mel = audio_processor.load_and_preprocess(filepath)
+            wav, mel = audio_processor.load_and_preprocess(raw_path)
             duration = wav.shape[1] / audio_processor.SAMPLE_RATE
         except Exception as e:
-            os.remove(filepath)
+            os.remove(raw_path)
             return jsonify({"error": f"音频处理失败: {e}"}), 400
 
-        # 保存处理后的 WAV（统一格式）
-        processed_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex[:12]}.wav")
+        # 保存处理后的 WAV（带日期时间命名，统一格式）
+        processed_name = _make_filename("voice", ".wav", 8)
+        processed_path = os.path.join(UPLOAD_DIR, processed_name)
         audio_processor.save_wav(wav.squeeze(0), processed_path)
+
+        # 原始文件不再需要，删除避免累积
+        os.remove(raw_path)
 
         # 生成波形数据用于前端可视化
         wav_np = wav.squeeze().cpu().numpy()
@@ -107,7 +138,7 @@ def upload_audio():
         step = max(1, len(wav_np) // 1000)
         waveform = wav_np[::step].tolist()
 
-        logger.info(f"[Upload] 音频已上传: {filename}, 时长: {duration:.2f}s")
+        logger.info(f"[Upload] 音频已上传: {raw_filename} → {processed_name}, 时长: {duration:.2f}s")
 
         return jsonify({
             "success": True,
@@ -279,22 +310,24 @@ def try_voice():
 
         # ONNX 推理
         providers = device_module.get_onnx_providers()
+        device, _ = device_module.get_device()
 
         if os.path.exists(enc_path):
-            # 分段模型: encoder → expand → decoder → postnet → HiFi-GAN
-            result = audio_processor.run_inference_split_fast(model_dir, text_seq, providers)
+            # 分段模型: encoder → expand → decoder → postnet
+            mel_np = audio_processor.run_inference_split_fast(model_dir, text_seq, providers)
         else:
             # 单文件模型 (VITS 等)
-            result = audio_processor.run_inference_onnx_fast(onnx_path, text_seq, providers)
+            mel_np = audio_processor.run_inference_onnx_fast(onnx_path, text_seq, providers)
 
-        # HiFi-GAN 返回波形 (1,1,T_wav)，否则返回 mel 用 Griffin-Lim
-        if result.ndim == 3 and result.shape[0] == 1 and result.shape[1] == 1:
-            # HiFi-GAN waveform output
-            wav = result.squeeze(0).squeeze(0)
+        # 统一使用 vocoder 封装（支持预训练声码器或 Griffin-Lim 回退）
+        if mel_np.ndim == 3 and mel_np.shape[0] == 1 and mel_np.shape[1] == 1:
+            # 老版本 ONNX 直接输出波形（hifigan.onnx）
+            wav = mel_np.squeeze(0).squeeze(0)
         else:
-            # Mel output, use Griffin-Lim fallback
-            mel_np = result.squeeze(0).T
-            wav = audio_processor.mel_to_wav_griffinlim(mel_np, sr=sample_rate)
+            from trainer.vocoder import mel_to_wav
+            mel_tensor = torch.FloatTensor(mel_np.squeeze(0).T)
+            checkpoint_path = os.path.join(model_dir, "checkpoint.pt")
+            wav = mel_to_wav(mel_tensor, checkpoint_path=checkpoint_path, device=device).numpy()
 
         # 调整语速
         if speed != 1.0:
@@ -306,10 +339,13 @@ def try_voice():
             import librosa
             wav = librosa.effects.pitch_shift(wav, sr=sample_rate, n_steps=pitch_shift)
 
-        # 保存为临时文件
-        output_filename = f"preview_{uuid.uuid4().hex[:8]}.wav"
+        # 保存为临时文件（带日期时间命名）
+        output_filename = _make_filename("preview", ".wav", 8)
         output_path = os.path.join(UPLOAD_DIR, output_filename)
         audio_processor.save_wav(wav, output_path, sr=sample_rate)
+
+        # 清理超过 24 小时的旧预览文件
+        _cleanup_old_previews()
 
         # 波形数据
         step = max(1, len(wav) // 1000)
@@ -485,6 +521,21 @@ def device_info():
 
 
 # ============================================================
+# 验证音频文件是否存在（解决 localStorage 残留问题）
+# ============================================================
+@app.route("/api/verify-clips", methods=["POST"])
+def verify_clips():
+    """检查上传的音频文件是否仍存在，前端用于清理 localStorage 中的残留记录。"""
+    data = request.get_json(silent=True)
+    if not data or "filenames" not in data:
+        return jsonify({"error": "缺少 filenames 参数"}), 400
+    result = {}
+    for fn in data["filenames"]:
+        result[fn] = os.path.isfile(os.path.join(UPLOAD_DIR, fn))
+    return jsonify(result)
+
+
+# ============================================================
 # 静态文件：上传目录
 # ============================================================
 @app.route("/uploads/<path:filename>")
@@ -525,4 +576,5 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Server failed: {e}", exc_info=True)
         raise
+
 

@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul 2>&1
 title Voice Clone Trainer
 cd /d "%~dp0"
 
@@ -15,7 +14,8 @@ for /f "delims=" %%i in ('where python 2^>nul') do (
 )
 if not defined PYTHON (
     echo [ERROR] Python not found!
-    goto :end
+    pause
+    exit /b 1
 )
 
 echo.
@@ -24,16 +24,24 @@ echo   Voice Clone Trainer v1.0
 echo ========================================
 echo.
 
-:: Auto-check and install missing deps
+:: --- Auto-check and install missing deps ---
 echo Checking dependencies...
 set NEED_INSTALL=0
 
-%PYTHON% -c "import flask" 2>nul || (set NEED_INSTALL=1)
-%PYTHON% -c "import torch" 2>nul || (set NEED_INSTALL=1)
-%PYTHON% -c "import librosa" 2>nul || (set NEED_INSTALL=1)
-%PYTHON% -c "import onnxruntime" 2>nul || (set NEED_INSTALL=1)
-%PYTHON% -c "import pypinyin" 2>nul || (set NEED_INSTALL=1)
-%PYTHON% -c "import onnxscript" 2>nul || (set NEED_INSTALL=1)
+"%PYTHON%" -c "import flask" 2>nul
+if %errorlevel% neq 0 set NEED_INSTALL=1
+"%PYTHON%" -c "import torch" 2>nul
+if %errorlevel% neq 0 set NEED_INSTALL=1
+"%PYTHON%" -c "import librosa" 2>nul
+if %errorlevel% neq 0 set NEED_INSTALL=1
+"%PYTHON%" -c "import onnxruntime" 2>nul
+if %errorlevel% neq 0 set NEED_INSTALL=1
+"%PYTHON%" -c "import pypinyin" 2>nul
+if %errorlevel% neq 0 set NEED_INSTALL=1
+"%PYTHON%" -c "import onnxscript" 2>nul
+if %errorlevel% neq 0 set NEED_INSTALL=1
+"%PYTHON%" -c "import whisper" 2>nul
+if %errorlevel% neq 0 set NEED_INSTALL=1
 
 if %NEED_INSTALL%==1 (
     echo       Some packages missing, installing...
@@ -42,6 +50,13 @@ if %NEED_INSTALL%==1 (
 ) else (
     echo       All OK
 )
+
+:: --- Show device info ---
+echo.
+echo [Device] PyTorch info:
+"%PYTHON%" -c "import torch; print('  Torch:', torch.__version__)"
+"%PYTHON%" -c "import torch; print('  CUDA:', torch.cuda.is_available())"
+"%PYTHON%" -c "import torch_directml; print('  DirectML:', torch_directml.is_available()); print('  GPU:', torch_directml.device_name(0) if torch_directml.is_available() else 'CPU')"
 
 if not exist "uploads" mkdir uploads
 if not exist "models" mkdir models
@@ -56,12 +71,11 @@ echo.
 
 start "" cmd /c "timeout /t 3 >nul && start http://127.0.0.1:5000"
 
-%PYTHON% server.py >> %LOG% 2>&1
+"%PYTHON%" server.py >> %LOG% 2>&1
 echo.
 echo [STOP] Exit code: %errorlevel%
 echo --- Last 15 lines ---
 powershell -Command "Get-Content '%LOG%' -Tail 15"
 
-:end
 echo.
 pause
