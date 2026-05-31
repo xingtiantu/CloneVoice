@@ -66,8 +66,8 @@ def export_model(model_type, checkpoint_path, output_dir,
         try:
             torch.onnx.export(wrapper, dummy_input, onnx_path,
                               input_names=["text_seq"], output_names=["audio_mel"],
-                              dynamic_axes={"text_seq": {1: "seq_len"}, "audio_mel": {1: "mel_len"}},
-                              opset_version=14, do_constant_folding=True)
+                              dynamic_axes={"text_seq": {0: "batch", 1: "seq_len"}, "audio_mel": {0: "batch", 1: "mel_len"}},
+                              opset_version=17, do_constant_folding=True)
         except Exception as e:
             _save_config_and_audio(output_dir, voice_name, reference_text, audio_path, model_type, text_mode)
             raise RuntimeError(f"ONNX export failed: {e}")

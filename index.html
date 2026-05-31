@@ -170,7 +170,7 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-wei
           <div class="radio-option" onclick="selR(this,tmG)"><input type="radio" name="tm" value="char"><div class="rt">字符模式</div><div class="rd">直接用汉字作为训练单元，适合非中文文本或特殊需求</div></div>
         </div>
       </div>
-      <input type="hidden" name="mt" value="fastspeech2" id="mtIn">
+      <input type="hidden" name="mt" value="vits" id="mtIn">
       <div class="form-group"><label>训练轮数（Epochs）</label><input type="text" id="epIn" value="300"></div>
       <div class="form-group"><label>Batch Size</label>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -220,7 +220,10 @@ label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-wei
 </div><label>自定义输入</label><textarea id="tryTxt" rows="4" style="min-height:80px">大家好，我是你的专属声音。今天天气真不错，我们一起出去散步吧。哇，这个消息太让人惊喜了！没关系，慢慢来，我一直都在你身边。时间过得真快，那些美好的回忆再也回不去了。</textarea></div>
       <div class="slider-row"><label>语速</label><input type="range" id="spdR" min="0.5" max="2" step="0.1" value="1" oninput="spdV.textContent=this.value+'x'"><span class="val" id="spdV">1x</span></div>
       <div class="slider-row"><label>音调</label><input type="range" id="pchR" min="-5" max="5" step="1" value="0" oninput="pchV.textContent=this.value"><span class="val" id="pchV">0</span></div>
-      <div style="text-align:center;margin-top:10px"><button class="btn btn-primary" onclick="tryV()" id="tryBtn">🔊 试听</button></div>
+      <div style="text-align:center;margin-top:10px;display:flex;gap:8px;justify-content:center">
+        <button class="btn btn-primary" onclick="tryV()" id="tryBtn">🔊 试听</button>
+        <button class="btn btn-success" onclick="tryVGpt()" id="tryGptBtn" title="使用 GPT-SoVITS 大模型合成（需先安装）">🚀 GPT-SoVITS</button>
+      </div>
       <div id="tryArea" style="margin-top:10px;display:none"><audio id="tryAud" controls style="width:100%"></audio></div>
     </div>
     <div class="card">
@@ -388,7 +391,7 @@ function delClip(i){S.clips.splice(i,1);renderClips();saveClips();if(!S.clips.le
 
 async function startTrain(){
   if(!S.clips.length){alert("请先录制");return}
-  var mt="fastspeech2",tm=document.querySelector("input[name=tm]:checked").value,vn=document.getElementById("vName").value.trim()||"我的声音",ep=parseInt(document.getElementById("epIn").value)||300,bs=parseInt(document.getElementById("bsIn").value)||1;
+  var mt="vits",tm=document.querySelector("input[name=tm]:checked").value,vn=document.getElementById("vName").value.trim()||"我的声音",ep=parseInt(document.getElementById("epIn").value)||300,bs=parseInt(document.getElementById("bsIn").value)||1;
   var emptyTxts=S.clips.filter(function(c){return !(c.text||"").trim()});
   if(emptyTxts.length){if(!confirm("有 "+emptyTxts.length+" 段音频未填写文本，将使用默认故事文案（可能影响克隆效果）。是否继续？"))return}
   goStep(3);S.lh=[];document.getElementById("pFill").style.width="0%";document.getElementById("pPct").textContent="0%";document.getElementById("epTxt").textContent="启动中...";
@@ -409,6 +412,7 @@ function listenSSE(jid){
 }
 function drawL(){var cv=document.getElementById("lossCV"),ctx=cv.getContext("2d");cv.width=cv.offsetWidth*2;cv.height=cv.offsetHeight*2;var W=cv.width,H=cv.height;ctx.fillStyle="#0a0a0f";ctx.fillRect(0,0,W,H);if(!S.lh.length){ctx.fillStyle="#94a3b8";ctx.font="20px sans-serif";ctx.fillText("...",W/2,H/2);return}var vs=S.lh.map(function(h){return h.loss});var mx=Math.max.apply(null,vs)*1.1,mn=Math.min.apply(null,vs)*0.9,r=mx-mn||1;var pL=55,pR=15,pT=15,pB=35,gw=W-pL-pR,gh=H-pT-pB;ctx.strokeStyle="#2d3748";ctx.lineWidth=1;for(var i=0;i<=4;i++){var y=pT+gh*(1-i/4);ctx.beginPath();ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();ctx.fillStyle="#94a3b8";ctx.font="16px sans-serif";ctx.fillText((mn+r*i/4).toFixed(4),3,y+5)}ctx.strokeStyle="#00d4ff";ctx.lineWidth=2.5;ctx.beginPath();for(var i=0;i<vs.length;i++){var x=pL+(i/Math.max(vs.length-1,1))*gw,y=pT+(1-(vs[i]-mn)/r)*gh;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y)}ctx.stroke();ctx.fillStyle="#94a3b8";ctx.font="14px sans-serif";ctx.fillText("Epoch 1",pL,H-6);ctx.fillText("Epoch "+vs.length,W-pR-60,H-6)}
 async function tryV(){if(!S.mid){alert("模型未就绪");return}var t=document.getElementById("tryTxt").value.trim();if(!t){alert("请输入文本");return}var b=document.getElementById("tryBtn");b.disabled=true;b.textContent="合成中...";try{var r=await fetch("/api/try-voice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model_id:S.mid,text:t,speed:parseFloat(document.getElementById("spdR").value),pitch:parseInt(document.getElementById("pchR").value)})});var d=await r.json();if(d.error){alert(d.error);return}document.getElementById("tryArea").style.display="block";document.getElementById("tryAud").src=d.audio_url;document.getElementById("tryAud").play()}catch(e){alert(e.message)}b.disabled=false;b.textContent="🔊 试听"}
+async function tryVGpt(){if(!S.mid){alert("模型未就绪");return}var t=document.getElementById("tryTxt").value.trim();if(!t){alert("请输入文本");return}var b=document.getElementById("tryGptBtn");b.disabled=true;b.textContent="GPT合成中...";try{var r=await fetch("/api/try-voice-gpt",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model_id:S.mid,text:t,speed:parseFloat(document.getElementById("spdR").value)})});var d=await r.json();if(d.error){alert(d.error);return}document.getElementById("tryArea").style.display="block";document.getElementById("tryAud").src=d.audio_url;document.getElementById("tryAud").play()}catch(e){alert(e.message)}b.disabled=false;b.textContent="🚀 GPT-SoVITS"}
 function doExp(){if(!S.mid){alert("无模型");return}window.open("/api/export/"+S.mid)}
 function toggleSidebar(){var sb=document.getElementById("sidebar");sb.classList.toggle("open");if(sb.classList.contains("open"))loadM()}
 async function loadM(){

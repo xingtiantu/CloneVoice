@@ -440,7 +440,40 @@ class TrainingJob:
             if (epoch + 1) % 10 == 0:
                 self._save_checkpoint_vits(model, optimizer, epoch + 1)
 
-        self._save_checkpoint_vits(model, optimizer, self.epochs or self.current_epoch)
+        # === HiFi-GAN Vocoder 训练 ===
+        logger.info("[HiFi-GAN] 开始训练声码器...")
+        from .hifigan_lite import HiFiGANGenerator
+        generator = HiFiGANGenerator().to(device)
+        g_optimizer = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.9))
+
+        hifigan_epochs = min(100, self.epochs)
+        for epoch in range(hifigan_epochs):
+            generator.train()
+            epoch_loss = 0
+            for batch in dataloader:
+                mel = batch["mel"].to(device)
+                wav = batch["wav"].to(device)
+
+                mel_denorm = mel * MEL_STD + MEL_MEAN
+                wav_pred = generator(mel_denorm)
+
+                min_len = min(wav_pred.size(2), wav.size(1))
+                loss = torch.nn.functional.l1_loss(
+                    wav_pred.squeeze(1)[:, :min_len],
+                    wav[:, :min_len]
+                )
+
+                g_optimizer.zero_grad()
+                loss.backward()
+                g_optimizer.step()
+
+                epoch_loss += loss.item()
+
+            avg_loss = epoch_loss / max(len(dataloader), 1)
+            if (epoch + 1) % 10 == 0 or epoch == 0:
+                logger.info(f"[HiFi-GAN] Epoch {epoch+1}/{hifigan_epochs}, Loss: {avg_loss:.6f}")
+
+        self._save_checkpoint_vits(model, optimizer, self.current_epoch, hifigan=generator)
 
     def _save_checkpoint(self, model, optimizer, epoch, is_best=False, hifigan=None):
         path = os.path.join(self.output_dir, "checkpoint.pt")
@@ -458,16 +491,19 @@ class TrainingJob:
         tag = " (best)" if is_best else ""
         logger.info(f"[Train] Checkpoint saved{tag}: {path}")
 
-    def _save_checkpoint_vits(self, model, optimizer, epoch, is_best=False):
+    def _save_checkpoint_vits(self, model, optimizer, epoch, is_best=False, hifigan=None):
         path = os.path.join(self.output_dir, "checkpoint.pt")
-        torch.save({
+        data = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "model_type": "vits",
             "text_mode": self.text_mode,
             "vocab_size": model.text_encoder.embedding.num_embeddings,
-        }, path)
+        }
+        if hifigan is not None:
+            data["hifigan_state_dict"] = hifigan.state_dict()
+        torch.save(data, path)
         tag = " (best)" if is_best else ""
         logger.info(f"[Train] Checkpoint saved{tag}: {path}")
 

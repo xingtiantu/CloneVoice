@@ -42,12 +42,51 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, :T]
 
 
+class SimpleMHA(nn.Module):
+    """ONNX 友好的多头注意力（权重键名与 nn.MultiheadAttention 完全兼容）。"""
+
+    def __init__(self, d_model, n_head, dropout=0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.n_head = n_head
+        self.head_dim = d_model // n_head
+
+        self.in_proj_weight = nn.Parameter(torch.empty(3 * d_model, d_model))
+        self.in_proj_bias = nn.Parameter(torch.empty(3 * d_model))
+        self.out_proj = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+
+        nn.init.xavier_uniform_(self.in_proj_weight)
+        nn.init.constant_(self.in_proj_bias, 0.0)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.constant_(self.out_proj.bias, 0.0)
+
+    def forward(self, x, mask=None):
+        B, T, D = x.shape
+        qkv = F.linear(x, self.in_proj_weight, self.in_proj_bias)
+        q, k, v = qkv.chunk(3, dim=-1)
+
+        q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        if mask is not None:
+            scores = scores.masked_fill(mask.unsqueeze(1).unsqueeze(2) == 0, float('-inf'))
+        attn = F.softmax(scores, dim=-1)
+        attn = self.dropout(attn)
+
+        out = torch.matmul(attn, v)
+        out = out.transpose(1, 2).contiguous().view(B, T, D)
+        return self.out_proj(out)
+
+
 class TransformerBlock(nn.Module):
     """单层 Transformer encoder block。"""
 
     def __init__(self, d_model=256, n_head=4, d_ff=1024, dropout=0.1):
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, n_head, dropout=dropout, batch_first=True)
+        self.self_attn = SimpleMHA(d_model, n_head, dropout)
         self.ff = nn.Sequential(
             nn.Linear(d_model, d_ff),
             nn.ReLU(),
@@ -59,18 +98,10 @@ class TransformerBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask=None):
-        """
-        Args:
-            x: (B, T, D)
-            mask: optional attention mask
-        """
-        # Self-attention
         residual = x
         x = self.norm1(x)
-        attn_out, _ = self.self_attn(x, x, x, key_padding_mask=mask)
+        attn_out = self.self_attn(x, mask)
         x = residual + self.dropout(attn_out)
-
-        # FFN
         residual = x
         x = self.norm2(x)
         x = residual + self.dropout(self.ff(x))

@@ -364,6 +364,73 @@ def try_voice():
 
 
 # ============================================================
+# API: GPT-SoVITS 试听合成
+# ============================================================
+@app.route("/api/try-voice-gpt", methods=["POST"])
+def try_voice_gpt():
+    """使用 GPT-SoVITS 进行 zero-shot 语音克隆试听。"""
+    try:
+        data = request.json
+        model_id = data.get("model_id")
+        text = data.get("text", "").strip()
+        speed = data.get("speed", 1.0)
+
+        if not model_id:
+            return jsonify({"error": "未指定模型"}), 400
+        if not text:
+            return jsonify({"error": "未输入文本"}), 400
+
+        model_dir = os.path.join(MODEL_DIR, model_id)
+        config_path = os.path.join(model_dir, "voice_config.json")
+
+        # 读取配置获取参考文本和参考音频
+        ref_text = ""
+        ref_audio = os.path.join(model_dir, "reference_audio.wav")
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            ref_text = config.get("reference_text", "")
+
+        if not os.path.exists(ref_audio):
+            return jsonify({"error": "参考音频不存在，请重新训练模型"}), 400
+
+        # GPT-SoVITS 合成
+        from trainer.gpt_sovits_wrapper import synthesize, is_available
+        if not is_available():
+            return jsonify({"error": "GPT-SoVITS 未安装。请先运行：python setup_gpt_sovits.py"}), 503
+
+        output_filename = _make_filename("preview_gpt", ".wav", 8)
+        output_path = os.path.join(UPLOAD_DIR, output_filename)
+
+        result_path = synthesize(
+            ref_audio_path=ref_audio,
+            ref_text=ref_text or "欢迎使用语音合成",
+            target_text=text,
+            output_path=output_path,
+            speed=speed,
+        )
+
+        _cleanup_old_previews()
+
+        # 读取生成音频的波形
+        import soundfile as sf
+        wav, sr = sf.read(result_path)
+        step = max(1, len(wav) // 1000)
+        waveform = wav[::step].tolist()
+
+        return jsonify({
+            "success": True,
+            "audio_url": f"/uploads/{output_filename}",
+            "duration": round(len(wav) / sr, 2),
+            "waveform": waveform,
+        })
+
+    except Exception as e:
+        logger.error(f"[Preview-GPT] GPT-SoVITS 试听失败: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
 # API: 模型列表
 # ============================================================
 @app.route("/api/models", methods=["GET"])
