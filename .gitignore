@@ -29,3 +29,6 @@ run_log.txt
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# CodeBuddy IDE
+.codebuddy/
